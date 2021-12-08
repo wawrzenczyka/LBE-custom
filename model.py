@@ -90,7 +90,7 @@ class LBE(nn.Module):
         h = self.h(x)
         return h
 
-    def loss(self, x, s):
+    def E_step(self, x, s):
         with torch.no_grad():
             h = self.h(x).squeeze()
             eta = self.eta(x).squeeze()
@@ -100,10 +100,9 @@ class LBE(nn.Module):
 
             P_y_hat = torch.cat([P_y_hat_0.reshape(-1, 1), P_y_hat_1.reshape(-1, 1)], axis = 1)
             P_y_hat /= P_y_hat.sum(axis=1).reshape(-1, 1)
+            return P_y_hat
 
-        # loss = s * P_y_hat[:, 1] * (torch.log(h) + torch.log(eta)) + \
-        #     (1 - s) * (P_y_hat[:, 1] * (torch.log(h) + torch.log(1 - eta)) + P_y_hat[:, 0] * torch.log(1 - h))
-        
+    def loss(self, x, s, P_y_hat):
         h = self.h(x).squeeze()
         eta = self.eta(x).squeeze()
 
@@ -112,19 +111,13 @@ class LBE(nn.Module):
         log_eta = torch.clamp_min(torch.log(eta), -100)
         log_1_minus_eta = torch.clamp_min(torch.log(1 - eta), -100)
 
-        # L_i_1 = h * eta
-        # L_i_0 = (1 - h) * eta
-
-        # P_s_given_x = L_i_1 + L_i_0
-
         loss = torch.where(
             s == 1,
-            P_y_hat[:, 1] * (log_h + log_eta)
-                + P_y_hat[:, 0] * (log_1_minus_h + (-100) * torch.ones_like(s)),
-            P_y_hat[:, 1] * (log_h + log_1_minus_eta) + P_y_hat[:, 0] * log_1_minus_h,
+            P_y_hat[:, 1] * (log_h + log_eta) + 0,
+            P_y_hat[:, 1] * (log_h + log_1_minus_eta) + P_y_hat[:, 0] * log_1_minus_h
         )
 
-        return -torch.mean(loss), None
+        return -torch.mean(loss), None, None
 
     def pre_train(self, x, s, epochs=100, lr=1e-3, print_msg=False):
         criterion = nn.BCELoss()
@@ -149,7 +142,7 @@ class LBE_alternative(nn.Module):
     def __init__(self, input_dim):
         super(LBE_alternative, self).__init__()
         self.theta_h = nn.Parameter(torch.randn((input_dim + 1, 1)), requires_grad=True)
-        self.theta_eta = nn.Parameter(torch.zeros((input_dim + 1, 1)), requires_grad=True)
+        self.theta_eta = nn.Parameter(torch.randn((input_dim + 1, 1)) / 100, requires_grad=True)
 
     def h(self, x):
         x = torch.cat([x, torch.ones((len(x), 1))], dim=1)
@@ -159,7 +152,7 @@ class LBE_alternative(nn.Module):
         x = torch.cat([x, torch.ones((len(x), 1))], dim=1)
         return 1 / (1 + torch.exp(-x @ self.theta_eta))
 
-    def loss(self, x, s):
+    def E_step(self, x, s):
         with torch.no_grad():
             h = self.h(x).squeeze()
             eta = self.eta(x).squeeze()
@@ -169,7 +162,9 @@ class LBE_alternative(nn.Module):
 
             P_y_hat = torch.cat([P_y_hat_0.reshape(-1, 1), P_y_hat_1.reshape(-1, 1)], axis = 1)
             P_y_hat /= P_y_hat.sum(axis=1).reshape(-1, 1)
+            return P_y_hat
 
+    def loss(self, x, s, P_y_hat):
         h = self.h(x).squeeze()
         eta = self.eta(x).squeeze()
 
@@ -177,11 +172,6 @@ class LBE_alternative(nn.Module):
         log_1_minus_h = torch.clamp_min(torch.log(1 - h), -100)
         log_eta = torch.clamp_min(torch.log(eta), -100)
         log_1_minus_eta = torch.clamp_min(torch.log(1 - eta), -100)
-
-        # L_i_1 = h * eta
-        # L_i_0 = (1 - h) * eta
-
-        # P_s_given_x = L_i_1 + L_i_0
 
         loss = torch.where(
             s == 1,

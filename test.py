@@ -3,8 +3,10 @@ dataset = 'vote'
 kappa = 10
 # pi = 0.4
 pre_epochs = 100
-epochs = 0
-lr = 1e-2
+epochs = 100
+M_step_iters = 10
+lr = 1e-3
+weight_decay = 1e-2
 print_msg = False
 
 for pi in [0.2, 0.3, 0.4]:
@@ -129,27 +131,31 @@ for pi in [0.2, 0.3, 0.4]:
         if print_msg:
             print("Accuracy:", ((s_pred.squeeze() > 0.5) == s).float().mean().item())
 
-        optimizer = optim.Adam(lbe.parameters(), lr=lr)
+        optimizer = optim.Adam(lbe.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(epochs):
-            optimizer.zero_grad()
+            P_y_hat = lbe.E_step(X_train, s)
 
-            # Forward pass
-            loss = lbe.loss(X_train, s)
-            # Backward pass
-            loss.backward()
+            for M_step_iter in range(M_step_iters):
+                optimizer.zero_grad()
 
-            # list(lbe.parameters())[0].grad
+                # Forward pass
+                loss, _, _ = lbe.loss(X_train, s, P_y_hat)
+                # Backward pass
+                loss.backward()
 
-            if print_msg:
-                print('Epoch {}: train loss: {}'.format(epoch, loss.item()))
-            optimizer.step()
+                optimizer.step()
 
-        X_test = X_test.float()
-        y_pred = lbe.h(X_test)
-        accuracy = ((y_pred.squeeze() > 0.5) == y_test).float().mean().item()
-        print(f"    FOLD {fold + 1} accuracy: {accuracy}")
+                if print_msg:
+                    print('Epoch {}, step {}: train loss: {}'
+                        .format(epoch, M_step_iter, loss.item()))
+        
+        with torch.no_grad():
+            X_test = X_test.float()
+            y_pred = lbe.h(X_test)
+            accuracy = ((y_pred.squeeze() > 0.5) == y_test).float().mean().item()
+            print(f"    FOLD {fold + 1} accuracy: {accuracy}")
 
-        accs.append(accuracy)
+            accs.append(accuracy)
 
     print(f"Pi: {pi}, mean accuracy: {np.mean(accs)}")

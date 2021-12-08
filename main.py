@@ -3,11 +3,11 @@ import torch
 
 n = 2000
 
-X1_neg = torch.normal(-3.7, 1, size=(int(n/2), 1))
+X1_neg = torch.normal(-2.7, 1, size=(int(n/2), 1))
 X2_neg = torch.normal(0, 1, size=(int(n/2), 1))
 X_neg = torch.cat([X1_neg, X2_neg], axis=1)
 
-X1_pos = torch.normal(3.7, 1, size=(int(n/2), 1))
+X1_pos = torch.normal(2.7, 1, size=(int(n/2), 1))
 X2_pos = torch.normal(0, 1, size=(int(n/2), 1))
 X_pos = torch.cat([X1_pos, X2_pos], axis=1)
 
@@ -265,22 +265,30 @@ plt.show()
 
 
 # %%
-optimizer = optim.Adam(lbe.parameters(), lr=1e-2)
+optimizer = optim.Adam(lbe.parameters(), lr=1e-3)
 
-epoch = 100
-for epoch in range(epoch):
-    optimizer.zero_grad()
+epochs = 100
+for epoch in range(epochs):
+    P_y_hat = lbe.E_step(X, s)
 
-    # Forward pass
-    loss, grad_theta_1, grad_theta_2 = lbe.loss(X, s)
-    # Backward pass
-    loss.backward()
+    for M_step_iter in range(100):
+        optimizer.zero_grad()
 
-    # list(lbe.parameters())[0].grad
+        # Forward pass
+        loss, grad_theta_1, grad_theta_2 = lbe.loss(X, s, P_y_hat)
+        # Backward pass
+        loss.backward()
+        
+        optimizer.step()
 
-    print('Epoch {}: train loss: {}'.format(epoch, loss.item()))
-    optimizer.step()
+        # print(grad_theta_1, lbe.theta_h.grad.squeeze())
+        # print(grad_theta_2, lbe.theta_eta.grad.squeeze())
+
+        # print('Epoch {}, step {}: train loss: {}'
+        #     .format(epoch, M_step_iter, loss.item()))
     
+    print('Epoch {}: train loss: {}'
+        .format(epoch, loss.item()))
     # scheduler.step()
 
 y_pred = lbe.h(X)
