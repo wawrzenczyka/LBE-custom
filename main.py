@@ -86,11 +86,13 @@ plt.show()
 def eta(x, lgr_param, intercept, kappa=10):
     return torch.pow(1 / (1 + torch.exp(-(x.double() @ lgr_param.T + intercept))), kappa)
 
+kappa = 10000
+
 propensity = eta(
         X, 
         torch.tensor(clf.coef_, dtype=torch.double), 
         torch.tensor(clf.intercept_, dtype=torch.double),
-        kappa = 100000,
+        kappa = kappa,
     ).reshape(-1).double()
 propensity[torch.where(y == 0)] = 0
 propensity
@@ -114,13 +116,17 @@ legend1 = plt.legend(*scatter.legend_elements(), title="Observed")
 
 # %%
 import torch.optim as optim
-from model import LBE
 
-lbe = LBE(2, kind="LF")
+from model import LBE
+from model import LBE_alternative
+# lbe = LBE(2, kind="LF")
+# lbe = LBE(2, kind="MLP")
+lbe = LBE_alternative(2)
+
 lbe.pre_train(X, s)
 
 s_pred = lbe.h(X)
-torch.sum((s_pred.reshape(-1) > 0.5) == s) / len(s)
+torch.sum((s_pred.squeeze() > 0.5) == s) / len(s)
 
 
 # %%
@@ -138,10 +144,10 @@ plt.show()
 
 
 # %%
-optimizer = optim.Adam(lbe.parameters())
+optimizer = optim.Adam(lbe.parameters(), lr=0.1)
 scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.95)
 
-epoch = 1000
+epoch = 100
 for epoch in range(epoch):
     optimizer.zero_grad()
 
@@ -149,6 +155,8 @@ for epoch in range(epoch):
     loss = lbe.loss(X, s)
     # Backward pass
     loss.backward()
+
+    # list(lbe.parameters())[0].grad
 
     print('Epoch {}: train loss: {}'.format(epoch, loss.item()))
     optimizer.step()
@@ -158,7 +166,7 @@ for epoch in range(epoch):
 
 # %%
 y_pred = lbe.h(X)
-torch.sum((y_pred.reshape(-1) > 0.5) == y) / len(y)
+torch.sum((y_pred.squeeze() > 0.5) == y) / len(y)
 
 
 # %%
@@ -183,7 +191,29 @@ xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
 Z = (lbe.eta(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)))
 Z = Z.reshape(xx.shape).detach().numpy()
 
-plt.contourf(xx, yy, Z, alpha=0.4)
+plt.figure(figsize=(8, 6))
+contour = plt.contourf(xx, yy, Z, alpha=0.4, cmap="Blues", levels=np.linspace(0, 1, 11))
+plt.colorbar(contour)
+plt.savefig(f"my_eta_kappa_{kappa}.pdf")
+
+plt.show()
+
+
+# %%
+x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
+
+Z = (eta(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32), 
+        torch.tensor(clf.coef_, dtype=torch.double), 
+        torch.tensor(clf.intercept_, dtype=torch.double),
+        kappa = kappa))
+Z = Z.reshape(xx.shape).detach().numpy()
+
+plt.figure(figsize=(8, 6))
+contour = plt.contourf(xx, yy, Z, alpha=0.4, cmap="Blues", levels=np.linspace(0, 1, 11))
+plt.colorbar(contour)
+plt.savefig(f"true_eta_kappa_{kappa}.pdf")
 
 plt.show()
 
