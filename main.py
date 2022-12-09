@@ -1,18 +1,19 @@
 # %%
 import torch
 
-n = 2000
+n = 1000
+n_pos = int(n/2)
 
-X1_neg = torch.normal(-2.7, 1, size=(int(n/2), 1))
-X2_neg = torch.normal(0, 1, size=(int(n/2), 1))
+X1_neg = torch.normal(-3.5, 1, size=(n_pos, 1))
+X2_neg = torch.normal(0, 1, size=(n_pos, 1))
 X_neg = torch.cat([X1_neg, X2_neg], axis=1)
 
-X1_pos = torch.normal(2.7, 1, size=(int(n/2), 1))
-X2_pos = torch.normal(0, 1, size=(int(n/2), 1))
+X1_pos = torch.normal(3.5, 1, size=(n_pos, 1))
+X2_pos = torch.normal(0, 1, size=(n_pos, 1))
 X_pos = torch.cat([X1_pos, X2_pos], axis=1)
 
 X = torch.cat([X_neg, X_pos], axis=0)
-y = torch.cat([torch.zeros(int(n/2)), torch.ones(int(n/2))], axis=0)
+y = torch.cat([torch.zeros(n_pos), torch.ones(n_pos)], axis=0)
 
 X, y
 
@@ -92,11 +93,11 @@ from sklearn.linear_model import LogisticRegression
 import numpy as np
 
 clf = LogisticRegression(tol=1e-3, max_iter=3)
+# clf = LogisticRegression()
 clf.fit(X, y)
 
 y_pred = clf.predict(X)
 np.mean(y_pred == y.numpy())
-    
 
 # %%
 x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
@@ -153,7 +154,7 @@ plt.show()
 def eta(x, lgr_param, intercept, kappa=10):
     return torch.pow(1 / (1 + torch.exp(-(x.double() @ lgr_param.T + intercept))), kappa)
 
-kappa = 100
+kappa = 10
 
 propensity = eta(
         X, 
@@ -185,15 +186,29 @@ plt.show()
 
 
 # %%
-weights = propensity / propensity.sum()
+# weights = propensity / propensity.sum()
 
-c = 0.4 * 0.5
-selected = np.random.choice(range(n), replace = False, size = int(c * n), p = weights)
-# selected
+# c = 0.4 * 0.5
+# selected = np.random.choice(range(n), replace = False, size = int(c * n), p = weights)
+# # selected
+# s = torch.zeros_like(y)
+# s[selected] = 1
+# s
+
+### V2
+
+# s = torch.bernoulli(propensity)
+# s = torch.where((s == 1) & (y == 1), 1, 0)
+# s
+
+### V3
+
+c = 0.4
+num_labeled = int(c * n_pos)
+idx = propensity.multinomial(num_samples=num_labeled, replacement=True)
+# idx = propensity.multinomial(num_samples=num_labeled, replacement=False)
 s = torch.zeros_like(y)
-s[selected] = 1
-s
-
+s[idx] = 1
 
 # %%
 import matplotlib.pyplot as plt
@@ -225,16 +240,17 @@ import torch.optim as optim
 
 from model import LBE
 from model import LBE_alternative
-# lbe = LBE(2, kind="LF")
+lbe = LBE(2, kind="LF")
 # lbe = LBE(2, kind="MLP")
-lbe = LBE_alternative(2)
+# lbe = LBE_alternative(2)
 
 X = X.float()
 s = s.float()
 lbe.pre_train(X, s, epochs=1000, lr=1e-2)
 
-s_pred = lbe.h(X)
-print(torch.sum((s_pred.squeeze() > 0.5) == s) / len(s))
+lbe_out = lbe(X)
+s_pred = torch.where(lbe_out.squeeze() > 0.5, 1, 0)
+print(torch.sum(s_pred == s) / len(s))
 # print(lbe.theta_h)
 
 # # %%
@@ -255,17 +271,21 @@ x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
 y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
 xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
 
-Z = (lbe.h(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)) > 0.5).int()
+Z = (lbe(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)) > 0.5).int()
 Z = Z.reshape(xx.shape).detach().numpy()
 
 plt.contourf(xx, yy, Z, alpha=0.4)
-plt.scatter(X[:, 0], X[:, 1], c=s, s=20, edgecolor="k")
+# plt.scatter(X[:, 0], X[:, 1], c=s, s=20, edgecolor="k")
+plt.scatter(X[:, 0], X[:, 1], c=s_pred.detach().numpy(), s=20, edgecolor="k")
 
 plt.show()
 
 
 # %%
-optimizer = optim.Adam(lbe.parameters(), lr=1e-3)
+from torch.optim.lr_scheduler import StepLR
+
+optimizer = optim.Adam(lbe.parameters(), lr=1e-2)
+# scheduler = StepLR(optimizer, step_size=10, gamma=0.99)
 
 epochs = 100
 for epoch in range(epochs):
@@ -278,10 +298,11 @@ for epoch in range(epochs):
         loss, grad_theta_1, grad_theta_2 = lbe.loss(X, s, P_y_hat)
         # Backward pass
         loss.backward()
-        
+
         optimizer.step()
 
         # print(grad_theta_1, lbe.theta_h.grad.squeeze())
+        # print(grad_theta_1, next(lbe.h.parameters()).grad.squeeze())
         # print(grad_theta_2, lbe.theta_eta.grad.squeeze())
 
         # print('Epoch {}, step {}: train loss: {}'
@@ -291,8 +312,16 @@ for epoch in range(epochs):
         .format(epoch, loss.item()))
     # scheduler.step()
 
-y_pred = lbe.h(X)
-torch.sum((y_pred.squeeze() > 0.5) == y) / len(y)
+lbe_out = lbe(X)
+y_proba = lbe_out.squeeze().detach().cpu().numpy()
+y_pred = np.where(y_proba > 0.5, 1, 0)
+
+from sklearn import metrics
+
+auc = metrics.roc_auc_score(y, y_proba)
+acc = metrics.accuracy_score(y, y_pred)
+
+f'ACC: {100 * acc:.2f}%, AUC: {100 * auc:.2f}%'
 
 
 # %%
@@ -300,7 +329,7 @@ x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
 y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
 xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
 
-Z = (lbe.h(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)) > 0.5).int()
+Z = (lbe(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)) > 0.5).int()
 Z = Z.reshape(xx.shape).detach().numpy()
 
 plt.contourf(xx, yy, Z, alpha=0.4)
@@ -314,7 +343,7 @@ x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
 y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
 xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
 
-Z = (lbe.eta(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32)))
+Z = (lbe.eta(torch.tensor(np.c_[xx.ravel(), yy.ravel()], dtype=torch.float32), sigmoid=True))
 Z = Z.reshape(xx.shape).detach().numpy()
 
 plt.figure(figsize=(8, 6))

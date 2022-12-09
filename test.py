@@ -1,83 +1,67 @@
 # %%
+# weight_decay = 0
+# get_lbe = lambda: LBE(X.shape[1], kind="LF")
+
+weight_decay = 1e-3
+get_lbe = lambda: LBE(X.shape[1], kind="MLP")
+
+# weight_decay = 0
+# get_lbe = lambda: LBE_alternative(X.shape[1])
+
 dataset = 'vote'
+# dataset = 'madelon'
+M_step_iters = 20
+
+print_msg = False
 kappa = 10
-# pi = 0.4
+lr = 1e-3
 pre_epochs = 100
 epochs = 100
-M_step_iters = 10
-lr = 1e-3
-weight_decay = 1e-2
-print_msg = False
 
-for pi in [0.2, 0.3, 0.4]:
-    import torch
-    import os
-    import re
-    from scipy.io import arff
-    import numpy as np
-    import pandas as pd
-    from sklearn.model_selection import KFold
+import torch
+import os
+from scipy.io import arff
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
 
+dir_path = os.path.dirname(os.path.realpath(__file__))
 
-    dir_path = os.path.dirname(os.path.realpath(__file__))
-
-
-    def read_names_file(filename):
-        with open(filename, 'r') as f:
-            columns = []
-            while True:
-                s = f.readline()
-                if s == '':
-                    break
-
-                match = re.match(r'([^:]+):\s+[a-zA-Z]+\.', s)
-                
-                if match is not None:
-                    column_name = match.groups()[0]
-                    columns.append(column_name)
-                
-            return columns
-
-
-    def get_datasets():
-        names = [
-            'Adult',
-            'BreastCancer',
-            'credit-a',
-            'credit-g',
-            'diabetes',
-            'heart-c',
-            'spambase',
-            'vote',
-            'wdbc',
-        ]
-
-        return {name: load_dataset(name) for name in names}
-
-
-    def load_dataset(name):
+def load_dataset(name):
+    if name == "madelon":
+        X = pd.concat([
+            pd.read_csv("data/madelon_train.data", sep=" ", header=None).dropna(axis=1),
+            pd.read_csv("data/madelon_valid.data", sep=" ", header=None).dropna(axis=1),
+        ])
+        y = pd.concat([
+            pd.read_csv("data/madelon_train.labels", sep=" ", header=None).dropna(axis=1),
+            pd.read_csv("data/madelon_valid.labels", sep=" ", header=None).dropna(axis=1),
+        ])[0]
+        y = np.where(y == 1, 1, 0)
+    else:
         data = arff.loadarff(os.path.join(dir_path, 'data', f'{name}.arff'))
         df = pd.DataFrame(data[0])
 
         X = df.iloc[:, :-1]
         y = df.iloc[:, -1]
 
-        return X.to_numpy(), y.to_numpy()
+    return X, y
 
-    X, y = load_dataset(dataset)
-    #Obtain mean of columns as you need, nanmean is convenient.
-    col_mean = np.nanmean(X, axis=0)
-    #Find indices that you need to replace
-    inds = np.where(np.isnan(X))
-    #Place column means in the indices. Align the arrays using take
-    X[inds] = np.take(col_mean, inds[1])
+X, y = load_dataset(dataset)
 
-    X, y = torch.tensor(X), torch.tensor(y)
+X = X.fillna(X.median())
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
 
-    kfold = KFold(n_splits=5, shuffle=True)
+X, y = torch.tensor(X), torch.tensor(y)
 
+kfold = KFold(n_splits=5, shuffle=True)
+dataset_split = list(kfold.split(X))
+
+for pi in [0.2, 0.3, 0.4]:
     accs = []
-    for fold, (train_ids, test_ids) in enumerate(kfold.split(X)):
+    for fold, (train_ids, test_ids) in enumerate(dataset_split):
         X_train, y_train = X[train_ids], y[train_ids]
         X_test, y_test = X[test_ids], y[test_ids]
 
@@ -116,15 +100,17 @@ for pi in [0.2, 0.3, 0.4]:
         s
 
         import torch.optim as optim
-
+        
         from model import LBE
         from model import LBE_alternative
-        # lbe = LBE(X.shape[1], kind="LF")
-        lbe = LBE(X.shape[1], kind="MLP")
-        # lbe = LBE_alternative(X.shape[1])
+        lbe = get_lbe().cuda()
 
-        X_train = X_train.float()
-        s = s.float()
+        X_train = X_train.float().cuda()
+        y_train = y_train.cuda()
+        X_test = X_test.cuda()
+        y_test = y_test.cuda()
+        s = s.float().cuda()
+
         lbe.pre_train(X_train, s, epochs=pre_epochs, lr=lr, print_msg=print_msg)
 
         s_pred = lbe.h(X_train)
@@ -152,10 +138,12 @@ for pi in [0.2, 0.3, 0.4]:
         
         with torch.no_grad():
             X_test = X_test.float()
-            y_pred = lbe.h(X_test)
+            y_pred = lbe(X_test)
             accuracy = ((y_pred.squeeze() > 0.5) == y_test).float().mean().item()
             print(f"    FOLD {fold + 1} accuracy: {accuracy}")
 
             accs.append(accuracy)
 
-    print(f"Pi: {pi}, mean accuracy: {np.mean(accs)}")
+    print(f"Pi: {pi}, accuracy: {np.mean(accs):.4f} +/- {np.std(accs):.4f}")
+
+# %%
